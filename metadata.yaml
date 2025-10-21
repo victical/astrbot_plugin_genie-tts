@@ -1,0 +1,6 @@
+name: astrbot_plugin_genie-tts # 这是你的插件的唯一识别名。
+desc: 基于 Genie TTS 的语音合成插件 # 插件简短描述
+help:
+version: v1.0.0
+author: victical # 作者
+repo: https://github.com/victical/astrbot_plugin_genie-tts # 插件的仓库地址

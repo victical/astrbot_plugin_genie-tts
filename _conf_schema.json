@@ -1,0 +1,95 @@
+{
+    "server_host": {
+        "description": "TTS 服务器 IP 地址",
+        "type": "string",
+        "default": "http://127.0.0.1"
+    },
+    "server_port": {
+        "description": "TTS 服务器端口",
+        "type": "int",
+        "default": 9999
+    },
+    "character_name": {
+        "description": "默认使用的角色名称",
+        "type": "string",
+        "default": "misono_mika"
+    },
+    "onnx_model_dir": {
+        "description": "ONNX 模型在服务器上的绝对路径",
+        "type": "string",
+        "hint": "例如：/models/misono_mika",
+        "default": "/models/misono_mika"
+    },
+    "ref_audio_path": {
+        "description": "参考音频在服务器上的绝对路径",
+        "type": "string",
+        "hint": "例如：/models/misono_mika/prompt.wav",
+        "default": "/models/misono_mika/prompt.wav"
+    },
+    "ref_audio_text": {
+        "description": "参考音频对应的文本",
+        "type": "string",
+        "default": "私も昔、これと似たようなの持ってたなぁ…。"
+    },
+    "retry_attempts": {
+        "description": "音频生成失败时的重试次数",
+        "type": "int",
+        "default": 3
+    },
+    "global_enable": {
+        "description": "全局开关（true=黑名单模式，false=白名单模式）",
+        "type": "bool",
+        "default": true
+    },
+    "split_sentence": {
+        "description": "是否自动分割长文本",
+        "type": "bool",
+        "default": true
+    },
+    "filter_code": {
+        "description": "是否过滤代码块",
+        "type": "bool",
+        "default": true
+    },
+    "filter_emoji": {
+        "description": "是否过滤 Emoji 和 QQ 表情",
+        "type": "bool",
+        "default": true
+    },
+    "filter_url": {
+        "description": "是否过滤 URL 和文件路径",
+        "type": "bool",
+        "default": true
+    },
+    "show_references": {
+        "description": "是否显示提取的代码和链接的参考文献",
+        "type": "bool",
+        "default": false
+    },
+    "send_text_with_audio": {
+        "description": "是否在发送语音后同时发送原始文本",
+        "type": "bool",
+        "default": false
+    },
+    "translation_provider_id": {
+        "description": "用于翻译的 LLM 提供商 ID（留空则使用默认提供商）",
+        "type": "string",
+        "hint": "例如：openai_provider_1、gemini_provider_1 等，可在 AstrBot 管理面板查看提供商 ID",
+        "default": ""
+    },
+    "prob": {
+        "description": "TTS 触发概率（0.0-1.0）",
+        "type": "float",
+        "default": 1.0
+    },
+    "text_limit": {
+        "description": "文本长度限制（超过此长度跳过 TTS，0 表示无限制）",
+        "type": "int",
+        "default": 200
+    },
+    "cooldown": {
+        "description": "冷却时间（秒，防止频繁触发）",
+        "type": "int",
+        "default": 0
+    }
+}
