@@ -21,6 +21,8 @@
 
 本插件是一个客户端，它的正常运行**必须依赖**一个独立运行的 [Genie-TTS 服务器](https://github.com/High-Logic/Genie-TTS)实例。
 
+目前Genie-TTS只能说日语，所以在使用前告知bot让其输出日语。
+
 在使用本插件前，请务必根据 Genie-TTS 项目的官方文档完成服务器的安装和启动。
 
 默认情况下，本插件会尝试连接位于 `127.0.0.1:9999` 的服务器。
@@ -48,4 +50,5 @@
 
 - `gentts globalon`: 全局启用 TTS（黑名单模式）。
 - `gentts globaloff`: 全局禁用 TTS（白名单模式）。
+
 
