@@ -54,6 +54,11 @@ class GenieTTSPlugin(Star):
         self.text_limit: int = int(config.get('text_limit', 200))
         self.cooldown: int = int(config.get('cooldown', 0))
         
+        # 自动卸载配置 (配置项已移至 _conf_schema.json)
+        self.auto_unload_enabled: bool = bool(config.get('auto_unload_enabled', True))
+        self.auto_unload_timeout: int = int(config.get('auto_unload_timeout', 600))  # 默认10分钟(600秒)
+        self.last_model_use_time: float = 0.0  # 最后一次使用模型的时间
+        
         # 会话状态管理
         self._session_state: Dict[str, SessionState] = {}
         
@@ -62,9 +67,16 @@ class GenieTTSPlugin(Star):
         
         logger.info(f"[GenieTTS] 插件初始化，TTS 服务器: {self.base_url}")
         logger.info(f"[GenieTTS] 全局开关: {self.global_enable}, 概率: {self.prob}, 长度限制: {self.text_limit}, 冷却: {self.cooldown}s")
+        logger.info(f"[GenieTTS] 自动卸载: {self.auto_unload_enabled}, 超时: {self.auto_unload_timeout}s")
         
         # 异步初始化 TTS 服务器
         asyncio.create_task(self._initialize_tts())
+        # 注册自动卸载任务
+        if self.auto_unload_enabled:
+            logger.info(f"[GenieTTS] 注册自动卸载任务，超时时间: {self.auto_unload_timeout}秒")
+            # 使用 asyncio.create_task 确保任务能正确执行
+            asyncio.create_task(self._auto_unload_task())
+            logger.info("[GenieTTS] 自动卸载任务注册完成")
 
     async def _initialize_tts(self):
         """初始化 TTS 服务器，加载模型和参考音频"""
@@ -105,9 +117,94 @@ class GenieTTSPlugin(Star):
             
             logger.info(f"[GenieTTS] 参考音频设置成功")
             self.initialized = True
+            # 初始化模型使用时间为当前时间
+            self.last_model_use_time = time.time()
+            logger.info(f"[GenieTTS] 模型初始化完成，设置最后使用时间: {self.last_model_use_time}")
             
         except Exception as e:
             logger.error(f"[GenieTTS] 初始化失败: {e}", exc_info=True)
+
+    async def _auto_unload_task(self):
+        """自动卸载模型的任务"""
+        logger.info("[GenieTTS] 自动卸载任务已启动")
+        while True:
+            try:
+                logger.debug("[GenieTTS] 自动卸载任务开始休眠60秒")
+                # 每分钟检查一次
+                await asyncio.sleep(60)
+                logger.debug("[GenieTTS] 自动卸载任务唤醒")
+                
+                logger.debug(f"[GenieTTS] 自动卸载任务检查: enabled={self.auto_unload_enabled}, initialized={self.initialized}")
+                
+                if not self.auto_unload_enabled:
+                    logger.debug("[GenieTTS] 自动卸载功能未启用")
+                    continue
+                
+                if not self.initialized:
+                    logger.debug("[GenieTTS] 模型未初始化，跳过自动卸载检查")
+                    continue
+                
+                # 检查是否超时
+                current_time = time.time()
+                time_since_last_use = current_time - self.last_model_use_time
+                logger.info(f"[GenieTTS] 检查模型是否需要卸载: 已空闲 {time_since_last_use:.1f} 秒, 超时设定: {self.auto_unload_timeout} 秒")
+                
+                if time_since_last_use >= self.auto_unload_timeout:
+                    logger.info(f"[GenieTTS] 模型 {self.character_name} 超时未使用，准备卸载")
+                    await self._unload_model()
+                    
+            except asyncio.CancelledError:
+                logger.info("[GenieTTS] 自动卸载任务已取消")
+                break
+            except Exception as e:
+                logger.error(f"[GenieTTS] 自动卸载任务出错: {e}", exc_info=True)
+
+    async def _unload_model(self):
+        """卸载当前模型"""
+        try:
+            logger.info(f"[GenieTTS] 开始卸载模型 {self.character_name}")
+            unload_payload = {
+                "character_name": self.character_name
+            }
+            
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: requests.post(f"{self.base_url}/unload_character", json=unload_payload, timeout=30)
+            )
+            
+            if response.status_code == 200:
+                logger.info(f"[GenieTTS] 模型 {self.character_name} 卸载成功")
+                self.initialized = False
+                # 重置最后使用时间
+                self.last_model_use_time = 0.0
+            else:
+                logger.error(f"[GenieTTS] 模型卸载失败: {response.text}")
+                
+        except Exception as e:
+            logger.error(f"[GenieTTS] 模型卸载异常: {e}", exc_info=True)
+
+    async def _reload_model_if_needed(self):
+        """如果模型未加载则重新加载"""
+        if not self.initialized:
+            logger.info(f"[GenieTTS] 模型 {self.character_name} 未加载，重新初始化")
+            await self._initialize_tts()
+            # 等待初始化完成并更新最后使用时间
+            for _ in range(10):  # 最多等待10秒
+                if self.initialized:
+                    self.last_model_use_time = time.time()
+                    logger.debug(f"[GenieTTS] 模型重新加载成功，更新最后使用时间: {self.last_model_use_time}")
+                    break
+                await asyncio.sleep(1)
+
+    async def _cleanup_file(self, audio_path: str):
+        """异步清理临时音频文件"""
+        try:
+            if os.path.exists(audio_path):
+                os.remove(audio_path)
+                logger.info(f"[GenieTTS] Cleaned up temp file: {audio_path}")
+        except Exception as e:
+            logger.warning(f"[GenieTTS] Failed to cleanup temp file {audio_path}: {e}")
 
     def _clean_text(self, text: str) -> Tuple[str, List[str]]:
         """
@@ -205,6 +302,8 @@ class GenieTTSPlugin(Star):
             self.config['prob'] = self.prob
             self.config['text_limit'] = self.text_limit
             self.config['cooldown'] = self.cooldown
+            self.config['auto_unload_enabled'] = self.auto_unload_enabled
+            self.config['auto_unload_timeout'] = self.auto_unload_timeout
             # AstrBotConfig 会自动保存
         except Exception as e:
             logger.warning(f"[GenieTTS] 保存配置失败: {e}")
@@ -228,11 +327,14 @@ class GenieTTSPlugin(Star):
             end_trim = detect_silence(audio.reverse())
             
             duration = len(audio)
-            trimmed = audio[start_trim:duration-end_trim]
+            # 保留结尾检测到静音前100毫秒的音频内容
+            silence_keep = 100
+            trimmed = audio[start_trim:duration-end_trim+silence_keep]
+            
             
             # 覆盖原文件
             trimmed.export(audio_path, format="wav")
-            logger.info(f"[GenieTTS] 已去除静音: 开头 {start_trim}ms, 结尾 {end_trim}ms")
+            logger.info(f"[GenieTTS] 已去除静音: 开头 {start_trim}ms, 结尾保留静音后{silence_keep}ms")
             
             return audio_path
         except Exception as e:
@@ -314,6 +416,7 @@ class GenieTTSPlugin(Star):
         """在发送消息前，将文本结果转换为语音"""
         try:
             if not self.initialized:
+                logger.debug("[GenieTTS] 模型未初始化，跳过TTS处理")
                 return
 
             # 获取会话ID
@@ -326,6 +429,7 @@ class GenieTTSPlugin(Star):
 
             result = event.get_result()
             if not result or not result.chain:
+                logger.debug("[GenieTTS] 消息结果为空或无内容，跳过TTS处理")
                 return
 
             # 检查是否为 LLM 响应
@@ -353,6 +457,7 @@ class GenieTTSPlugin(Star):
             text_to_convert = text_to_convert.strip()
 
             if not text_to_convert or len(text_to_convert) < 2:
+                logger.debug("[GenieTTS] 提取的文本内容过短，跳过TTS处理")
                 return
 
             # 2. 概率门控
@@ -373,6 +478,12 @@ class GenieTTSPlugin(Star):
                 return
 
             logger.info(f"[GenieTTS] 开始处理: '{text_to_convert[:50]}...'")
+
+            # 重新加载模型（如果需要）
+            await self._reload_model_if_needed()
+            # 更新最后使用时间
+            self.last_model_use_time = now
+            logger.debug(f"[GenieTTS] 更新模型最后使用时间: {now}")
 
             # 生成音频
             audio_path = await self._generate_audio(text_to_convert)
@@ -413,127 +524,140 @@ class GenieTTSPlugin(Star):
         except Exception as e:
             logger.error(f"[GenieTTS] Failed to decorate result with TTS audio: {e}", exc_info=True)
 
-    @filter.command("gentts")
-    async def gentts_command(self, event: AstrMessageEvent, subcommand: str = "", text: str = ""):
-        """Genie TTS 命令: gentts <test|on|off|status|globalon|globaloff> [文本]"""
-        subcommand = subcommand.lower().strip()
+    @filter.command("gentts-test")
+    async def gentts_test_command(self, event: AstrMessageEvent, text: str = ""):
+        """测试语音生成"""
+        if not text or len(text.strip()) == 0:
+            yield event.plain_result("请提供要转换的文本: gentts test <文本>")
+            return
+    
+        cleaned_text, references = self._clean_text(text)
+        if not cleaned_text or len(cleaned_text.strip()) < 2:
+            yield event.plain_result("文本内容过短或无效")
+            return
+    
+        yield event.plain_result(f"正在生成语音...")
+    
+        try:
+            await self._reload_model_if_needed()
+            self.last_model_use_time = time.time()
         
-        # test 子命令 - 测试语音生成
-        if subcommand == "test":
-            try:
-                if not self.initialized:
-                    yield event.plain_result("TTS 服务器未就绪，请稍后再试")
-                    return
-                
-                if not text or len(text.strip()) == 0:
-                    yield event.plain_result("请提供要转换的文本: gentts test <文本>")
-                    return
-                
-                cleaned_text, references = self._clean_text(text)
-                
-                if not cleaned_text or len(cleaned_text.strip()) < 2:
-                    yield event.plain_result("文本内容过短或无效")
-                    return
-                
-                yield event.plain_result(f"正在生成语音...")
-                
-                audio_path = await self._generate_audio(cleaned_text)
-                
-                yield event.chain_result([
-                    Comp.Record(file=audio_path, url=audio_path)
-                ])
-                
-                if self.config.get('show_references', False) and references:
-                    ref_text = "\n".join(references)
-                    yield event.plain_result(f"[参考信息]\n{ref_text}")
-                
-                try:
-                    await asyncio.sleep(5)
-                    if os.path.exists(audio_path):
-                        os.remove(audio_path)
-                except Exception as e:
-                    logger.warning(f"[GenieTTS] 清理临时文件失败: {e}")
-                    
-            except Exception as e:
-                logger.error(f"[GenieTTS] 手动 TTS 失败: {e}", exc_info=True)
-                yield event.plain_result(f"语音生成失败: {str(e)}")
+            audio_path = await self._generate_audio(cleaned_text)
         
-        # on 子命令 - 启用会话 TTS
-        elif subcommand == "on":
-            sid = self._sess_id(event)
-            if self.global_enable:
-                if sid in self.disabled_sessions:
-                    self.disabled_sessions.remove(sid)
-            else:
-                if sid not in self.enabled_sessions:
-                    self.enabled_sessions.append(sid)
-            yield event.plain_result("✅ 本会话 TTS 已启用")
+            yield event.chain_result([
+                Comp.Record(file=audio_path, url=audio_path)
+            ])
         
-        # off 子命令 - 禁用会话 TTS
-        elif subcommand == "off":
-            sid = self._sess_id(event)
-            if self.global_enable:
-                if sid not in self.disabled_sessions:
-                    self.disabled_sessions.append(sid)
-            else:
-                if sid in self.enabled_sessions:
-                    self.enabled_sessions.remove(sid)
-            yield event.plain_result("❌ 本会话 TTS 已禁用")
-
-        # globalon 子命令 - 全局启用
-        elif subcommand == "globalon":
-            if not event.is_admin():
-                yield event.plain_result("🚫 权限不足，仅管理员可操作")
-                return
-            self.global_enable = True
-            self._save_config()
-            yield event.plain_result("✅ 全局 TTS 已启用 (黑名单模式)")
-
-        # globaloff 子命令 - 全局禁用
-        elif subcommand == "globaloff":
-            if not event.is_admin():
-                yield event.plain_result("🚫 权限不足，仅管理员可操作")
-                return
-            self.global_enable = False
-            self._save_config()
-            yield event.plain_result("❌ 全局 TTS 已禁用 (白名单模式)")
-        
-        # status 子命令 - 查看状态
-        elif subcommand == "status":
-            sid = self._sess_id(event)
-            enabled = self._is_session_enabled(sid)
-            mode = "黑名单模式（默认启用）" if self.global_enable else "白名单模式（默认禁用）"
+            if self.config.get('show_references', False) and references:
+                ref_text = "\n".join(references)
+                yield event.plain_result(f"[参考信息]\n{ref_text}")
             
-            state = self._session_state.get(sid)
-            last_tts = ""
-            if state and state.last_tts_time > 0:
-                elapsed = int(time.time() - state.last_tts_time)
-                last_tts = f"\n最后 TTS: {elapsed}秒前"
-            
-            status = f"""📊 Genie TTS 状态
+            # 清理临时文件
+            asyncio.create_task(self._cleanup_file(audio_path))
+        
+        except Exception as e:
+            logger.error(f"[GenieTTS] 手动 TTS 失败: {e}", exc_info=True)
+            yield event.plain_result(f"语音生成失败: {str(e)}")
+
+    @filter.command("gentts-on")
+    async def gentts_on_command(self, event: AstrMessageEvent):
+        """启用当前会话 TTS"""
+        sid = self._sess_id(event)
+        if self.global_enable:
+            if sid in self.disabled_sessions:
+                self.disabled_sessions.remove(sid)
+        else:
+            if sid not in self.enabled_sessions:
+                self.enabled_sessions.append(sid)
+        yield event.plain_result("✅ 本会话 TTS 已启用")
+
+    @filter.command("gentts-off")
+    async def gentts_off_command(self, event: AstrMessageEvent):
+        """禁用当前会话 TTS"""
+        sid = self._sess_id(event)
+        if self.global_enable:
+            if sid not in self.disabled_sessions:
+                self.disabled_sessions.append(sid)
+        else:
+            if sid in self.enabled_sessions:
+                self.enabled_sessions.remove(sid)
+        yield event.plain_result("❌ 本会话 TTS 已禁用")
+
+    @filter.command("gentts-status")
+    async def gentts_status_command(self, event: AstrMessageEvent):
+        """查看 TTS 状态"""
+        sid = self._sess_id(event)
+        enabled = self._is_session_enabled(sid)
+        mode = "黑名单模式（默认启用）" if self.global_enable else "白名单模式（默认禁用）"
+    
+        state = self._session_state.get(sid)
+        last_tts = ""
+        if state and state.last_tts_time > 0:
+            elapsed = int(time.time() - state.last_tts_time)
+            last_tts = f"\n最后 TTS: {elapsed}秒前"
+    
+        model_idle_time = ""
+        if self.initialized and self.last_model_use_time > 0:
+            idle_elapsed = int(time.time() - self.last_model_use_time)
+            model_idle_time = f"\n模型空闲: {idle_elapsed}秒"
+    
+        # 添加当前模型信息
+        current_model = self.character_name if self.initialized else "未加载"
+        
+        status = f"""📊 Genie TTS 状态
 
 🔧 全局模式: {mode}
 ⚡ 当前会话: {'✅ 启用' if enabled else '❌ 禁用'}
 🎲 触发概率: {self.prob}
 📏 长度限制: {self.text_limit if self.text_limit > 0 else '无限制'}
 ⏰ 冷却时间: {self.cooldown}秒{last_tts}
-🎙️ 服务器: {'✅ 就绪' if self.initialized else '❌ 未就绪'}"""
-            
-            yield event.plain_result(status)
-        
-        # 帮助信息
+🎙️ 服务器: {'✅ 就绪' if self.initialized else '❌ 未就绪'}{model_idle_time}
+🤖 当前模型: {current_model}
+🔄 自动卸载: {'✅ 启用' if self.auto_unload_enabled else '❌ 禁用'} ({self.auto_unload_timeout}秒)"""
+    
+        yield event.plain_result(status)
+
+    @filter.command("gentts-globalon")
+    async def gentts_globalon_command(self, event: AstrMessageEvent):
+        """全局启用 TTS"""
+        if not event.is_admin():
+            yield event.plain_result("🚫 权限不足，仅管理员可操作")
+            return
+        self.global_enable = True
+        self._save_config()
+        yield event.plain_result("✅ 全局 TTS 已启用 (黑名单模式)")
+
+    @filter.command("gentts-globaloff")
+    async def gentts_globaloff_command(self, event: AstrMessageEvent):
+        """全局禁用 TTS"""
+        if not event.is_admin():
+            yield event.plain_result("🚫 权限不足，仅管理员可操作")
+            return
+        self.global_enable = False
+        self._save_config()
+        yield event.plain_result("❌ 全局 TTS 已禁用 (白名单模式)")
+
+    @filter.command("gentts-unload")
+    async def gentts_unload_command(self, event: AstrMessageEvent):
+        """手动卸载模型"""
+        if not event.is_admin():
+            yield event.plain_result("🚫 权限不足，仅管理员可操作")
+            return
+        await self._unload_model()
+        yield event.plain_result("✅ 模型已卸载")
+
+    @filter.command("gentts-load")
+    async def gentts_load_command(self, event: AstrMessageEvent):
+        """手动加载模型"""
+        if not event.is_admin():
+            yield event.plain_result("🚫 权限不足，仅管理员可操作")
+            return
+        yield event.plain_result("⏳ 正在加载模型...")
+        await self._initialize_tts()
+        if self.initialized:
+            yield event.plain_result("✅ 模型加载成功")
         else:
-            help_msg = """📖 Genie TTS 命令帮助
-
-» gentts test <文本> - 测试语音生成
-» gentts on - 启用当前会话 TTS
-» gentts off - 禁用当前会话 TTS
-» gentts status - 查看 TTS 状态
-
---- 管理员指令 ---
-» gentts globalon - 全局启用 TTS
-» gentts globaloff - 全局禁用 TTS"""
-            yield event.plain_result(help_msg)
+            yield event.plain_result("❌ 模型加载失败")
 
     async def terminate(self):
         """插件卸载时清理临时文件"""

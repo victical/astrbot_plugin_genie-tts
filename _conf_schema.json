@@ -2,7 +2,7 @@
     "server_host": {
         "description": "TTS 服务器 IP 地址",
         "type": "string",
-        "default": "127.0.0.1"
+        "default": "http://127.0.0.1"
     },
     "server_port": {
         "description": "TTS 服务器端口",
@@ -35,6 +35,16 @@
         "description": "音频生成失败时的重试次数",
         "type": "int",
         "default": 3
+    },
+    "auto_unload_enabled": {
+        "description": "是否启用自动卸载模型功能",
+        "type": "bool",
+        "default": true
+    },
+    "auto_unload_timeout": {
+        "description": "自动卸载超时时间（秒）",
+        "type": "int",
+        "default": 600
     },
     "global_enable": {
         "description": "全局开关（true=黑名单模式，false=白名单模式）",
@@ -93,4 +103,3 @@
         "default": 0
     }
 }
-
