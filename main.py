@@ -54,11 +54,6 @@ class GenieTTSPlugin(Star):
         self.text_limit: int = int(config.get('text_limit', 200))
         self.cooldown: int = int(config.get('cooldown', 0))
         
-        # 自动卸载配置 (配置项已移至 _conf_schema.json)
-        self.auto_unload_enabled: bool = bool(config.get('auto_unload_enabled', True))
-        self.auto_unload_timeout: int = int(config.get('auto_unload_timeout', 600))  # 默认10分钟(600秒)
-        self.last_model_use_time: float = 0.0  # 最后一次使用模型的时间
-        
         # 会话状态管理
         self._session_state: Dict[str, SessionState] = {}
         
@@ -67,16 +62,9 @@ class GenieTTSPlugin(Star):
         
         logger.info(f"[GenieTTS] 插件初始化，TTS 服务器: {self.base_url}")
         logger.info(f"[GenieTTS] 全局开关: {self.global_enable}, 概率: {self.prob}, 长度限制: {self.text_limit}, 冷却: {self.cooldown}s")
-        logger.info(f"[GenieTTS] 自动卸载: {self.auto_unload_enabled}, 超时: {self.auto_unload_timeout}s")
         
         # 异步初始化 TTS 服务器
         asyncio.create_task(self._initialize_tts())
-        # 注册自动卸载任务
-        if self.auto_unload_enabled:
-            logger.info(f"[GenieTTS] 注册自动卸载任务，超时时间: {self.auto_unload_timeout}秒")
-            # 使用 asyncio.create_task 确保任务能正确执行
-            asyncio.create_task(self._auto_unload_task())
-            logger.info("[GenieTTS] 自动卸载任务注册完成")
 
     async def _initialize_tts(self):
         """初始化 TTS 服务器，加载模型和参考音频"""
@@ -123,41 +111,6 @@ class GenieTTSPlugin(Star):
             
         except Exception as e:
             logger.error(f"[GenieTTS] 初始化失败: {e}", exc_info=True)
-
-    async def _auto_unload_task(self):
-        """自动卸载模型的任务"""
-        logger.info("[GenieTTS] 自动卸载任务已启动")
-        while True:
-            try:
-                logger.debug("[GenieTTS] 自动卸载任务开始休眠60秒")
-                # 每分钟检查一次
-                await asyncio.sleep(60)
-                logger.debug("[GenieTTS] 自动卸载任务唤醒")
-                
-                logger.debug(f"[GenieTTS] 自动卸载任务检查: enabled={self.auto_unload_enabled}, initialized={self.initialized}")
-                
-                if not self.auto_unload_enabled:
-                    logger.debug("[GenieTTS] 自动卸载功能未启用")
-                    continue
-                
-                if not self.initialized:
-                    logger.debug("[GenieTTS] 模型未初始化，跳过自动卸载检查")
-                    continue
-                
-                # 检查是否超时
-                current_time = time.time()
-                time_since_last_use = current_time - self.last_model_use_time
-                logger.info(f"[GenieTTS] 检查模型是否需要卸载: 已空闲 {time_since_last_use:.1f} 秒, 超时设定: {self.auto_unload_timeout} 秒")
-                
-                if time_since_last_use >= self.auto_unload_timeout:
-                    logger.info(f"[GenieTTS] 模型 {self.character_name} 超时未使用，准备卸载")
-                    await self._unload_model()
-                    
-            except asyncio.CancelledError:
-                logger.info("[GenieTTS] 自动卸载任务已取消")
-                break
-            except Exception as e:
-                logger.error(f"[GenieTTS] 自动卸载任务出错: {e}", exc_info=True)
 
     async def _unload_model(self):
         """卸载当前模型"""
@@ -302,8 +255,6 @@ class GenieTTSPlugin(Star):
             self.config['prob'] = self.prob
             self.config['text_limit'] = self.text_limit
             self.config['cooldown'] = self.cooldown
-            self.config['auto_unload_enabled'] = self.auto_unload_enabled
-            self.config['auto_unload_timeout'] = self.auto_unload_timeout
             # AstrBotConfig 会自动保存
         except Exception as e:
             logger.warning(f"[GenieTTS] 保存配置失败: {e}")
@@ -481,9 +432,6 @@ class GenieTTSPlugin(Star):
 
             # 重新加载模型（如果需要）
             await self._reload_model_if_needed()
-            # 更新最后使用时间
-            self.last_model_use_time = now
-            logger.debug(f"[GenieTTS] 更新模型最后使用时间: {now}")
 
             # 生成音频
             audio_path = await self._generate_audio(text_to_convert)
@@ -596,11 +544,6 @@ class GenieTTSPlugin(Star):
             elapsed = int(time.time() - state.last_tts_time)
             last_tts = f"\n最后 TTS: {elapsed}秒前"
     
-        model_idle_time = ""
-        if self.initialized and self.last_model_use_time > 0:
-            idle_elapsed = int(time.time() - self.last_model_use_time)
-            model_idle_time = f"\n模型空闲: {idle_elapsed}秒"
-    
         # 添加当前模型信息
         current_model = self.character_name if self.initialized else "未加载"
         
@@ -611,9 +554,8 @@ class GenieTTSPlugin(Star):
 🎲 触发概率: {self.prob}
 📏 长度限制: {self.text_limit if self.text_limit > 0 else '无限制'}
 ⏰ 冷却时间: {self.cooldown}秒{last_tts}
-🎙️ 服务器: {'✅ 就绪' if self.initialized else '❌ 未就绪'}{model_idle_time}
-🤖 当前模型: {current_model}
-🔄 自动卸载: {'✅ 启用' if self.auto_unload_enabled else '❌ 禁用'} ({self.auto_unload_timeout}秒)"""
+🎙️ 服务器: {'✅ 就绪' if self.initialized else '❌ 未就绪'}
+🤖 当前模型: {current_model}"""
     
         yield event.plain_result(status)
 
